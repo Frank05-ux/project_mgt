@@ -1,173 +1,212 @@
 <?php
 session_start();
-include 'db.php';
 
-// --- Summary queries ---
-
-// Total cars
-$totalCars = $conn->query("SELECT COUNT(*) AS total FROM car")->fetch_assoc()['total'];
-
-// Sold cars (match lowercase 'sold')
-$soldCars = $conn->query("SELECT COUNT(*) AS sold FROM car WHERE status='sold'")->fetch_assoc()['sold'];
-
-// Available cars
-$availableCars = $conn->query("SELECT COUNT(*) AS available FROM car WHERE status='available'")->fetch_assoc()['available'];
-
-// Total sales value (COALESCE avoids null if no sales)
-$totalSales = $conn->query("SELECT COALESCE(SUM(amount), 0) AS total_sales FROM sales")->fetch_assoc()['total_sales'];
-
-// Total customers
-$totalCustomers = $conn->query("SELECT COUNT(*) AS total_customers FROM customers")->fetch_assoc()['total_customers'];
-
-// Total number of unique cars sold
-$uniqueCarsSold = $conn->query("SELECT COUNT(DISTINCT car_id) AS unique_sold FROM sales")->fetch_assoc()['unique_sold'];
-
-// --- Dynamic Back Link ---
-if (isset($_SESSION['role'])) {
-  if ($_SESSION['role'] === 'admin') {
-    $redirect = 'admin_dashboard.php';
-  } elseif ($_SESSION['role'] === 'sales') {
-    $redirect = 'inventory.php';
-  } else {
-    $redirect = 'login.php';
-  }
-} else {
-  // fallback if role not set
-  $redirect = 'login.php';
+// ✅ Only allow logged-in admin
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
+    header("Location: login.php");
+    exit();
 }
+
+// ✅ Connect to Database
+$conn = new mysqli("localhost", "root", "", "hospital_db");
+if ($conn->connect_error) {
+    die("Connection failed: " . $conn->connect_error);
+}
+
+// ================================
+//  1️⃣ DAILY QUEUE SUMMARY
+// ================================
+$dailySql = "
+    SELECT 
+        DATE(created_at) AS date,
+        COUNT(*) AS total_patients,
+        SUM(CASE WHEN status='waiting' THEN 1 ELSE 0 END) AS waiting,
+        SUM(CASE WHEN status IN ('completed','done','serving') THEN 1 ELSE 0 END) AS served
+    FROM queue
+    GROUP BY DATE(created_at)
+    ORDER BY DATE(created_at) DESC
+";
+$dailyResult = $conn->query($dailySql);
+
+// ================================
+//  2️⃣ DOCTOR PERFORMANCE
+// ================================
+$doctorSql = "
+    SELECT 
+        u.username AS doctor_name,
+        COUNT(a.id) AS total_appointments,
+        SUM(CASE WHEN a.status='completed' THEN 1 ELSE 0 END) AS completed,
+        SUM(CASE WHEN a.status='cancelled' THEN 1 ELSE 0 END) AS cancelled
+    FROM users u
+    LEFT JOIN appointments a ON u.id = a.doctor_id
+    WHERE u.role='doctor'
+    GROUP BY u.username
+    ORDER BY total_appointments DESC
+";
+$doctorResult = $conn->query($doctorSql);
+
+// ================================
+//  3️⃣ PATIENT QUEUE HISTORY
+// ================================
+$queueSql = "
+    SELECT 
+        patient_name,
+        status,
+        created_at
+    FROM queue
+    ORDER BY created_at DESC
+";
+$queueResult = $conn->query($queueSql);
+
+// ================================
+//  4️⃣ SYSTEM STATS
+// ================================
+$totalDoctors = $conn->query("SELECT COUNT(*) AS total FROM users WHERE role='doctor'")->fetch_assoc()['total'];
+$totalReceptionists = $conn->query("SELECT COUNT(*) AS total FROM users WHERE role='receptionist'")->fetch_assoc()['total'];
+$totalPatients = $conn->query("SELECT COUNT(*) AS total FROM users WHERE role='patient'")->fetch_assoc()['total'];
+$totalAppointments = $conn->query("SELECT COUNT(*) AS total FROM appointments")->fetch_assoc()['total'];
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Reports Dashboard</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-body {
-  font-family: 'Poppins', sans-serif;
-  background: url('https://images.unsplash.com/photo-1503376780353-7e6692767b70?auto=format&fit=crop&w=1950&q=80') center/cover no-repeat fixed;
-  color: #fff;
-  margin: 0;
-  padding: 0;
-}
-
-.container {
-  max-width: 1150px;
-  margin: 60px auto;
-  background: rgba(0,0,0,0.75);
-  border-radius: 15px;
-  padding: 40px 30px;
-  box-shadow: 0 0 25px rgba(0,0,0,0.6);
-}
-
-h1 {
-  text-align: center;
-  color: #00ffcc;
-  margin-bottom: 40px;
-  font-size: 2.2rem;
-  letter-spacing: 1px;
-}
-
-.cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  gap: 25px;
-}
-
-.card {
-  background: rgba(255,255,255,0.1);
-  border-radius: 15px;
-  padding: 25px 15px;
-  text-align: center;
-  box-shadow: 0 0 12px rgba(0,0,0,0.3);
-  transition: 0.3s;
-}
-.card:hover {
-  transform: scale(1.05);
-  background: rgba(255,255,255,0.15);
-}
-
-.card h2 {
-  font-size: 2.3rem;
-  margin: 10px 0;
-  color: #00ffcc;
-}
-
-.card p {
-  font-size: 1rem;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: #ccc;
-}
-
-.back-btn {
-  display: inline-block;
-  margin-top: 40px;
-  padding: 12px 25px;
-  background: #00ffcc;
-  color: #000;
-  border-radius: 8px;
-  text-decoration: none;
-  font-weight: bold;
-  transition: 0.3s;
-}
-
-.back-btn:hover {
-  background: #00d4a5;
-}
-
-footer {
-  margin-top: 30px;
-  text-align: center;
-  color: #aaa;
-  font-size: 0.9rem;
-}
-</style>
+    <meta charset="UTF-8">
+    <title>Reports | Hospital Admin Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body { background-color: #f4f6f9; }
+        .sidebar { width: 250px; height: 100vh; position: fixed; background: #0d6efd; color: #fff; padding-top: 20px; }
+        .sidebar a { color: #fff; display: block; padding: 10px 20px; text-decoration: none; }
+        .sidebar a:hover, .sidebar a.active { background: #0b5ed7; }
+        .content { margin-left: 260px; padding: 20px; }
+        .card { border: none; border-radius: 10px; box-shadow: 0 0 8px rgba(0,0,0,0.1); }
+        table { background: #fff; border-radius: 8px; overflow: hidden; }
+    </style>
 </head>
 <body>
 
-<div class="container">
-  <h1>📊 System Reports Dashboard</h1>
+<!-- Sidebar -->
+<div class="sidebar">
+    <h4 class="text-center mb-4">Admin Panel</h4>
+    <a href="admin_dashboard.php"><i class="fas fa-chart-line"></i> Dashboard</a>
+    <a href="manage_patient.php"><i class="fas fa-user-injured"></i> Manage Patients</a>
+    <a href="doctors.php"><i class="fas fa-user-md"></i> Manage Doctors</a>
+    <a href="queue.php"><i class="fas fa-list"></i> Queue</a>
+    <a href="reports.php" class="active"><i class="fas fa-file-alt"></i> Reports</a>
+    <a href="logout.php"><i class="fas fa-sign-out-alt"></i> Logout</a>
+</div>
 
-  <div class="cards">
-    <div class="card">
-      <h2><?= $totalCars ?></h2>
-      <p>Total Cars in System</p>
+<!-- Content -->
+<div class="content">
+    <h2 class="mb-4">📊 Reports Overview</h2>
+
+    <!-- Top Summary Cards -->
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="card p-3 text-center bg-light">
+                <h5>Doctors</h5>
+                <h3><?= $totalDoctors ?></h3>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card p-3 text-center bg-light">
+                <h5>Receptionists</h5>
+                <h3><?= $totalReceptionists ?></h3>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card p-3 text-center bg-light">
+                <h5>Patients</h5>
+                <h3><?= $totalPatients ?></h3>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card p-3 text-center bg-light">
+                <h5>Appointments</h5>
+                <h3><?= $totalAppointments ?></h3>
+            </div>
+        </div>
     </div>
 
-    <div class="card">
-      <h2><?= $soldCars ?></h2>
-      <p>Sold Cars</p>
+    <!-- Daily Queue Summary -->
+    <div class="card mb-4">
+        <div class="card-header bg-primary text-white">📅 Daily Queue Summary</div>
+        <div class="card-body">
+            <table class="table table-striped">
+                <thead class="table-primary">
+                    <tr>
+                        <th>Date</th>
+                        <th>Total Patients</th>
+                        <th>Waiting</th>
+                        <th>Served / Completed</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php while ($row = $dailyResult->fetch_assoc()): ?>
+                        <tr>
+                            <td><?= htmlspecialchars($row['date']) ?></td>
+                            <td><?= $row['total_patients'] ?></td>
+                            <td><?= $row['waiting'] ?></td>
+                            <td><?= $row['served'] ?></td>
+                        </tr>
+                    <?php endwhile; ?>
+                </tbody>
+            </table>
+        </div>
     </div>
 
-    <div class="card">
-      <h2><?= $availableCars ?></h2>
-      <p>Available Cars</p>
+    <!-- Doctor Performance -->
+    <div class="card mb-4">
+        <div class="card-header bg-success text-white">🩺 Doctor Performance</div>
+        <div class="card-body">
+            <table class="table table-striped">
+                <thead class="table-success">
+                    <tr>
+                        <th>Doctor</th>
+                        <th>Total Appointments</th>
+                        <th>Completed</th>
+                        <th>Cancelled</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php while ($row = $doctorResult->fetch_assoc()): ?>
+                        <tr>
+                            <td><?= htmlspecialchars($row['doctor_name']) ?></td>
+                            <td><?= $row['total_appointments'] ?></td>
+                            <td><?= $row['completed'] ?></td>
+                            <td><?= $row['cancelled'] ?></td>
+                        </tr>
+                    <?php endwhile; ?>
+                </tbody>
+            </table>
+        </div>
     </div>
 
-    <div class="card">
-      <h2>$<?= number_format($totalSales, 2) ?></h2>
-      <p>Total Sales Revenue</p>
+    <!-- Patient Queue History -->
+    <div class="card mb-4">
+        <div class="card-header bg-warning text-dark">🧾 Patient Queue History</div>
+        <div class="card-body">
+            <table class="table table-striped">
+                <thead class="table-warning">
+                    <tr>
+                        <th>Patient Name</th>
+                        <th>Status</th>
+                        <th>Created At</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php while ($row = $queueResult->fetch_assoc()): ?>
+                        <tr>
+                            <td><?= htmlspecialchars($row['patient_name']) ?></td>
+                            <td><?= ucfirst($row['status']) ?></td>
+                            <td><?= $row['created_at'] ?></td>
+                        </tr>
+                    <?php endwhile; ?>
+                </tbody>
+            </table>
+        </div>
     </div>
 
-    <div class="card">
-      <h2><?= $uniqueCarsSold ?></h2>
-      <p>Unique Cars Sold</p>
-    </div>
-
-    <div class="card">
-      <h2><?= $totalCustomers ?></h2>
-      <p>Total Customers</p>
-    </div>
-  </div>
-
-  <center>
-    <a href="<?= $redirect ?>" class="back-btn">⬅ Back</a>
-  </center>
-
-  <footer>
-    © <?= date('Y') ?> Car Sales Management System
-  </footer>
 </div>
 
 </body>

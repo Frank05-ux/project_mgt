@@ -1,187 +1,215 @@
 <?php
 session_start();
-include 'db.php';
-$error = '';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $username = $_POST['username'] ?? '';
-    $password = $_POST['password'] ?? '';
+// ✅ Database Connection
+$conn = new mysqli("localhost", "root", "", "hospital_db");
+if ($conn->connect_error) {
+    die("❌ Database connection failed: " . $conn->connect_error);
+}
 
-    if ($username && $password) {
-        $stmt = $conn->prepare("SELECT * FROM admin WHERE username = ?");
-        $stmt->bind_param("s", $username);
+$error = "";
+
+if (isset($_POST['login'])) {
+    $email = trim($_POST['email'] ?? '');
+    $password = trim($_POST['password'] ?? '');
+
+    if ($email === '' || $password === '') {
+        $error = "⚠️ Please enter your email and password.";
+    } else {
+        // ✅ Use prepared statement for security
+        $stmt = $conn->prepare("SELECT id, username, password, role FROM users WHERE email = ?");
+        $stmt->bind_param("s", $email);
         $stmt->execute();
         $result = $stmt->get_result();
 
         if ($result->num_rows === 1) {
-            $admin = $result->fetch_assoc();
-            if (hash('sha256', $password) === $admin['password']) {
-                $_SESSION['admin'] = $admin['username'];
-                header("Location: _dashboard.php");
-                exit();
+            $user = $result->fetch_assoc();
+
+            // ✅ Verify password securely
+            if (password_verify($password, $user['password'])) {
+                $_SESSION['user_id'] = $user['id'];
+                $_SESSION['username'] = $user['username'];
+                $_SESSION['role'] = $user['role'];
+
+                // ✅ Always redirect to admin dashboard
+                header("Location: admin_dashboard.php");
+                exit;
             } else {
-                $error = "Invalid username or password!";
+                $error = "❌ Invalid password.";
             }
         } else {
-            $error = "Invalid username or password!";
+            $error = "🚫 User not found.";
         }
+
         $stmt->close();
-    } else {
-        $error = "Please enter username and password.";
     }
 }
 $conn->close();
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin Login</title>
+<title>Hospital Login</title>
 <style>
-/* Reset */
 * {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  margin: 0; padding: 0; box-sizing: border-box;
+  font-family: 'Poppins', sans-serif;
+  transition: all 0.3s ease;
 }
-
-/* Full-page high-quality car background with overlay */
 body {
-    height: 100vh;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    background: url('https://images.unsplash.com/photo-1605902711622-cfb43c443bf0?auto=format&fit=crop&w=1950&q=80') center/cover no-repeat fixed;
-    position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  background: linear-gradient(135deg, #0546a0, #70b7ff, #ffd0d0);
+  background-image: url('hospital image/hospital.png');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
-body::before {
-    content: '';
-    position: absolute;
-    top:0; left:0; right:0; bottom:0;
-    background: rgba(0,0,0,0.5);
+/* Floating fade animation */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-20px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
-/* Bigger login box with glass effect */
 .login-box {
-    position: relative;
-    background: rgba(255, 255, 255, 0.08);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    padding: 50px 40px;
-    border-radius: 20px;
-    width: 400px; /* big size */
-    text-align: center;
-    box-shadow: 0 20px 40px rgba(0,0,0,0.5);
-    transition: transform 0.3s ease, box-shadow 0.3s ease;
-    z-index: 1;
+  width: 370px;
+  background: rgba(255,255,255,0.9);
+  padding: 35px 30px;
+  border-radius: 18px;
+  box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+  animation: fadeIn 1s ease forwards;
 }
 
-.login-box:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 25px 50px rgba(0,0,0,0.6);
+h2 {
+  text-align: center;
+  margin-bottom: 25px;
+  color: #0546a0;
+  font-size: 28px;
+  text-shadow: 0 0 10px #70b7ff;
 }
 
-/* Header */
-.login-box h2 {
-    font-size: 32px;
-    color: #ffffff;
-    margin-bottom: 30px;
-    text-shadow: 1px 1px 8px rgba(0,0,0,0.7);
+.input-group {
+  margin-bottom: 18px;
+  position: relative;
+}
+label {
+  font-size: 1rem;
+  color: #0546a0;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+input {
+  width: 100%;
+  padding: 12px 38px 12px 38px;
+  margin-top: 7px;
+  border: 1px solid #b3d1ff;
+  border-radius: 10px;
+  outline: none;
+  background: #f7fbff;
+  font-size: 15px;
+  color: #222;
+}
+input:focus {
+  box-shadow: 0 0 8px #70b7ff;
+}
+.toggle-password {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  color: #70b7ff;
 }
 
-/* Inputs */
-.login-box input {
-    width: 100%;
-    padding: 16px 15px;
-    margin: 14px 0;
-    border-radius: 12px;
-    border: 1px solid rgba(255,255,255,0.4);
-    background: rgba(255,255,255,0.1);
-    color: #fff;
-    font-size: 18px;
-    outline: none;
-    transition: border 0.3s ease, background 0.3s ease, box-shadow 0.3s ease;
+button {
+  width: 100%;
+  background: linear-gradient(90deg, #0546a0 0%, #70b7ff 100%);
+  color: #fff;
+  padding: 13px;
+  border: none;
+  border-radius: 10px;
+  font-weight: bold;
+  cursor: pointer;
+  font-size: 17px;
+  letter-spacing: 1px;
+  box-shadow: 0 2px 8px rgba(112,183,255,0.15);
+}
+button:hover {
+  background: linear-gradient(90deg, #70b7ff 0%, #0546a0 100%);
+  transform: scale(1.04);
+  box-shadow: 0 0 15px #70b7ff;
 }
 
-.login-box input::placeholder {
-    color: rgba(255,255,255,0.7);
+.error {
+  color: #d8000c;
+  background: #ffd2d2;
+  border-left: 4px solid #ff4d4d;
+  padding: 10px 12px;
+  margin-bottom: 18px;
+  border-radius: 8px;
+  font-size: 1rem;
 }
 
-.login-box input:focus {
-    border: 1px solid #88c0d0;
-    background: rgba(255,255,255,0.15);
-    box-shadow: 0 0 10px #88c0d0aa;
-}
-
-/* Button */
-.login-box button {
-    width: 100%;
-    padding: 16px 0;
-    margin-top: 25px;
-    border: none;
-    border-radius: 25px;
-    background: #88c0d0;
-    color: #2e3440;
-    font-size: 20px;
-    font-weight: bold;
-    cursor: pointer;
-    transition: background 0.3s ease, transform 0.2s ease;
-}
-
-.login-box button:hover {
-    background: #81a1c1;
-    transform: translateY(-2px);
-}
-
-/* Error message */
-.error-msg {
-    background: #bf616a;
-    padding: 14px 15px;
-    border-radius: 10px;
-    margin-bottom: 18px;
-    font-weight: bold;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-    text-align: center;
-}
-
-/* Responsive */
-@media (max-width: 480px) {
-    .login-box {
-        width: 90%;
-        padding: 35px 25px;
-    }
-
-    .login-box h2 {
-        font-size: 28px;
-    }
-
-    .login-box input {
-        font-size: 16px;
-        padding: 14px 12px;
-    }
-
-    .login-box button {
-        font-size: 18px;
-        padding: 14px 0;
-    }
+footer {
+  text-align: center;
+  margin-top: 20px;
+  font-size: 0.8rem;
+  color: #0546a0;
 }
 </style>
 </head>
 <body>
-
 <div class="login-box">
-    <h2>Admin Login</h2>
-    <?php if($error) echo "<div class='error-msg'>$error</div>"; ?>
-    <form method="POST" action="">
-        <input type="text" name="username" placeholder="Username" required>
-        <input type="password" name="password" placeholder="Password" required>
-        <button type="submit">Login</button>
-    </form>
+  <h2>🏥 Hospital Login</h2>
+
+  <?php if ($error): ?>
+    <div class="error"><?= htmlspecialchars($error) ?></div>
+  <?php endif; ?>
+
+  <form method="POST" action="">
+    <div class="input-group">
+      <label for="email">📧 Email</label>
+      <input type="email" id="email" name="email" placeholder="e.g. admin@hospital.com" required autocomplete="username">
+    </div>
+
+    <div class="input-group">
+      <label for="password">🔒 Password</label>
+      <input type="password" id="password" name="password" placeholder="Enter your password" required autocomplete="current-password">
+      <button type="button" class="toggle-password" onclick="togglePassword()" tabindex="-1">👁️</button>
+    </div>
+
+    <div style="text-align:right; margin-bottom:12px;">
+      <a href="#" style="color:#0546a0; text-decoration:underline; font-size:0.95rem;">Forgot Password?</a>
+    </div>
+
+    <button type="submit" name="login">Login</button>
+  </form>
+
+  <footer>© <?= date('Y') ?> Hospital Management System</footer>
 </div>
 
+<script>
+function togglePassword() {
+  const pwd = document.getElementById('password');
+  const btn = document.querySelector('.toggle-password');
+  if (pwd.type === 'password') {
+    pwd.type = 'text';
+    btn.textContent = '🙈';
+  } else {
+    pwd.type = 'password';
+    btn.textContent = '👁️';
+  }
+}
+</script>
 </body>
 </html>
